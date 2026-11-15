@@ -4,5 +4,8 @@
 .venv
 .ignore
 AGENTS.md
+CLAUDE.md
+*egg-info
+build
 tests/fixtures/firmware/build/
 __pycache__/
