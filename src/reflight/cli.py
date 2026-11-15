@@ -37,9 +37,11 @@ def main(argv: list[str] | None = None) -> int:
     config_commands = config.add_subparsers(dest="config_command", required=True)
     validate = config_commands.add_parser("validate")
     validate.add_argument("--board", type=Path, required=True)
+    validate.add_argument("--scenario", type=Path)
     configured_run = commands.add_parser("run", help="run firmware with a validated board")
     configured_run.add_argument("--firmware", type=Path, required=True)
     configured_run.add_argument("--board", type=Path, required=True)
+    configured_run.add_argument("--scenario", type=Path)
     configured_run.add_argument("--output-dir", type=Path, required=True)
     configured_run.add_argument("--max-instructions", type=_positive_int, default=1000)
     args = parser.parse_args(argv)
@@ -52,19 +54,30 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             board = load_board(args.board)
+            clock = None
+            scenario = None
+            if args.scenario:
+                from reflight.config.scenario import load_scenario
+                scenario = load_scenario(args.scenario, board)
             validate_board_runtime(board)
             spi_bus = build_spi_bus(board)
+            if scenario is not None:
+                from reflight.simulation.playback import build_simulation
+                clock = build_simulation(scenario, spi_bus)
             trace = run_firmware(
                 args.firmware, args.max_instructions,
                 uart_peripheral=board.telemetry.peripheral,
                 gpio_pins=board.capture.pins,
                 spi_bus=spi_bus,
+                clock=clock,
             )
             write_configured_outputs(trace, board, args.output_dir)
         except Exception as exc:
             print(f"reflight: {exc}", file=sys.stderr)
             return 1
         print(f"Executed {trace.instruction_count} instructions; wrote {args.output_dir}")
+        if clock is not None:
+            print(f"Simulation time {trace.elapsed_time_s:g} s; stop reason: {trace.stop_reason}")
         return 0
 
     if args.command == "config":
@@ -72,7 +85,10 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             board = load_board(args.board)
-        except ConfigError as exc:
+            if args.scenario:
+                from reflight.config.scenario import load_scenario
+                load_scenario(args.scenario, board)
+        except (ConfigError, ValueError) as exc:
             print(f"reflight: {exc}", file=sys.stderr)
             return 1
         print(f"valid: {board.model}; SVD {board.svd_path}; "

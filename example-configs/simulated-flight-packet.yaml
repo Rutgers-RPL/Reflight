@@ -1,0 +1,7 @@
+# Synthetic simulated_flight.c fixture format, not a real flight protocol.
+sync: [0xa5, 0x5a]
+byte_order: little
+fields:
+  - {name: icm_accel_x, type: int16}
+  - {name: bmi_accel_x, type: int16}
+  - {name: ms_d1, type: uint32}

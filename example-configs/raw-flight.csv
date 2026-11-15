@@ -1,0 +1,4 @@
+Time (s),Accel X (count),Accel Y (count),Accel Z (count)
+10,10,0,-10
+10.03,40,0,-40
+10.1,180,0,-180

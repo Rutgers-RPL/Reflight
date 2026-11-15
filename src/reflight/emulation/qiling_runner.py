@@ -14,6 +14,7 @@ from qiling.extensions.mcu.stm32f4.stm32f407 import stm32f407
 if TYPE_CHECKING:
     from reflight.config import BoardConfig
     from reflight.buses import SpiBus
+    from reflight.simulation.clock import VirtualClock
 
 
 _USART_CLOCKS = {
@@ -37,6 +38,7 @@ class UARTByteEvent:
     value: int
     pc: int
     instruction_count: int
+    time_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,7 @@ class GPIOTransition:
     pc: int
     instruction_count: int
     pin: str = "PA5"
+    time_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,8 @@ class ExecutionTrace:
     uart_events: tuple[UARTByteEvent, ...]
     gpio_output_baseline: int | None
     gpio_transitions: tuple[GPIOTransition, ...]
+    elapsed_time_s: float | None = None
+    stop_reason: str = "instruction_cap"
 
     @property
     def uart_bytes(self) -> bytes:
@@ -72,7 +77,7 @@ class _GPIOOutputObserver:
         self.transitions: list[GPIOTransition] = []
 
     def observe(self, moder: int, odr: int, *, pc: int,
-                instruction_count: int) -> None:
+                instruction_count: int, time_s: float | None = None) -> None:
         if ((moder >> (2 * self.pin)) & 0b11) != 0b01:
             self.current_level = None
             return
@@ -83,7 +88,7 @@ class _GPIOOutputObserver:
                 self.output_baseline = level
         elif level != self.current_level:
             self.transitions.append(GPIOTransition(level, pc, instruction_count,
-                                                   self.pin_name))
+                                                   self.pin_name, time_s))
         self.current_level = level
 
 
@@ -135,11 +140,15 @@ def run_firmware(
     firmware: str | Path, max_instructions: int = 1000, *,
     uart_peripheral: str = "USART2", gpio_pins: tuple[str, ...] = ("PA5",),
     spi_bus: SpiBus | None = None,
+    clock: VirtualClock | None = None,
 ) -> ExecutionTrace:
-    """Run a Flash-linked STM32F407 ELF, stopping after a fixed instruction budget.
+    """Run a Flash-linked STM32F407 ELF with an instruction cap and optional clock.
 
     UART bytes come from the selected Qiling USART TX queue after firmware DR writes.
     GPIO transitions reflect selected pins' effective output level after writes.
+    Qiling retains its normal MCU hardware/interrupt stepping. With a virtual
+    clock, instruction N starts at (N-1)/instructions_per_second and observes
+    all samples due by that instant. Endpoint samples run before returning.
     """
     if max_instructions <= 0:
         raise ValueError("max_instructions must be positive")
@@ -178,6 +187,11 @@ def run_firmware(
 
     def on_instruction(_ql: Qiling, address: int, _size: int) -> None:
         nonlocal instruction_count
+        if clock is not None:
+            clock.before_instruction(instruction_count)
+        if (clock is not None and clock.finished) or instruction_count >= max_instructions:
+            ql.os.stop()
+            return
         instruction_count += 1
         if spi_bus is not None:
             spi_bus.tick()
@@ -223,7 +237,8 @@ def run_firmware(
         if (getattr(rcc.instance, clock_register) & (1 << clock_bit)) and \
                 (usart.instance.CR1 & 0x2008) == 0x2008:
             uart_events.append(UARTByteEvent(data[0], ql.arch.regs.pc,
-                                             instruction_count))
+                                             instruction_count,
+                                             clock.time_s if clock else None))
 
     def on_gpio_write(device: object, _access: object, offset: int,
                       _size: int, _value: int, *, port: str) -> None:
@@ -232,7 +247,8 @@ def run_firmware(
             for observer in gpio_ports[port]:
                 observer.observe(device.instance.MODER, device.instance.ODR,
                                  pc=ql.arch.regs.pc,
-                                 instruction_count=instruction_count)
+                                 instruction_count=instruction_count,
+                                 time_s=clock.time_s if clock else None)
                 if spi_bus is not None and observer.pin_name in spi_bus.devices \
                         and observer.current_level is not None:
                     spi_bus.set_cs(observer.pin_name, observer.current_level)
@@ -247,6 +263,10 @@ def run_firmware(
         )
 
     ql.run(count=max_instructions)
+    if clock is not None:
+        clock.before_instruction(instruction_count)
+    stop_reason = (clock.end_reason if clock is not None and clock.finished else
+                   "instruction_cap" if instruction_count >= max_instructions else "firmware_exit")
     if spi_adapter is not None and spi_adapter.failure is not None:
         raise RuntimeError(f"SPI1 transfer failed: {spi_adapter.failure}") from spi_adapter.failure
     transitions = sorted(
@@ -256,4 +276,4 @@ def run_firmware(
     return ExecutionTrace(tuple(first_pcs), instruction_count, tuple(writes),
                           tuple(uart_events),
                           observers["PA5"].output_baseline if "PA5" in observers else None,
-                          tuple(transitions))
+                          tuple(transitions), clock.time_s if clock else None, stop_reason)

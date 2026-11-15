@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.util
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 import yaml
@@ -84,7 +84,7 @@ def _local_file(value: Any, where: str, parent: Path) -> Path:
 
 def _output_name(value: Any, where: str) -> str:
     name = _string(value, where)
-    if (name in (".", "..") or Path(name).name != name or Path(name).is_reserved()
+    if (name in (".", "..") or Path(name).name != name or PureWindowsPath(name).is_reserved()
             or "/" in name or "\\" in name or ":" in name):
         raise ConfigError(f"{where} must be a filename inside --output-dir")
     return name
@@ -215,4 +215,9 @@ def load_board(path: str | Path) -> BoardConfig:
                             tuple(pins))
     if telemetry.file == capture.file:
         raise ConfigError("telemetry and capture filenames must differ")
+    if telemetry.packet_definition is not None:
+        from reflight.outputs.packets import decoded_filename, load_packet_definition
+        load_packet_definition(telemetry.packet_definition)
+        if decoded_filename(telemetry.file) in (telemetry.file, capture.file):
+            raise ConfigError("decoded telemetry and other output filenames must differ")
     return BoardConfig(source, model, svd_path, index, tuple(buses), telemetry, capture)

@@ -31,7 +31,7 @@ def _board(tmp_path: Path, data: dict | None = None) -> tuple[Path, dict]:
 def test_valid_board_is_structured_and_cwd_independent(tmp_path: Path, monkeypatch) -> None:
     path, content = _board(tmp_path)
     packet = tmp_path / "packet.yaml"
-    packet.write_text("future: only\n", encoding="utf-8")
+    packet.write_text("sync: [165, 90]\nbyte_order: little\nfields:\n  - {name: value, type: uint8}\n", encoding="utf-8")
     content["outputs"]["telemetry"]["packet_definition"] = "packet.yaml"
     path.write_text(yaml.safe_dump(content), encoding="utf-8")
     monkeypatch.chdir(tmp_path.parent)
