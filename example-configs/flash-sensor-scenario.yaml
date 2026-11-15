@@ -1,0 +1,14 @@
+simulation:
+  duration_s: 0.25
+  instructions_per_second: 200000
+sources:
+  motion:
+    kind: openrocket
+    csv_path: flash-motion.csv
+    time_column: time_s
+    columns:
+      accel_x: accel_x
+      accel_y: accel_y
+      accel_z: accel_z
+default_source: motion
+# Only ICM45686 receives motion data. Flash has no scenario entry.

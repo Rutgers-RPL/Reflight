@@ -1,0 +1,18 @@
+# Optional main-only 128 MiB artifact, selected explicitly by this board.
+schema_version: 1
+mcu:
+  model: STM32F407VG
+  svd: ../tests/fixtures/svd/stm32f407-minimal.svd
+buses:
+  SPI1:
+    devices:
+      - {model: W25N01KV, cs: PA7}
+      - {model: ICM45686, cs: PA4}
+outputs:
+  telemetry: {peripheral: USART2, file: telemetry.bin, format: raw}
+  capture:
+    file: hardware_events.csv
+    sources:
+      - {type: gpio, pins: [PB1], mode: transitions}
+  flash:
+    - {device: SPI1.PA7, file: flash.bin}

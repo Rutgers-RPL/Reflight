@@ -2,7 +2,7 @@
 
 Reflight is a software-in-the-loop framework for testing firmware. It runs the actual firmware with Qiling, feeds simulated sensor data, and captures UART telemetry and GPIO events.
 
-Currently verified: STM32F407VG with SPI1 polling. I2C execution is not supported.
+Currently verified: STM32F407VG with SPI1 polling, sensor playback, and external SPI-NAND read/program/erase. I2C execution is not supported.
 
 ## Setup
 
@@ -80,6 +80,40 @@ Runs stop at the first active CSV endpoint or configured duration, subject to th
 Timing is deterministic, not cycle-accurate. The supported SPI subset is master, 8-bit, mode 0, software chip select, and polling.
 
 See the [reference](docs/reference.md) for configuration rules, sensor channels and rates, timing, packet decoding, and limitations.
+
+## External SPI-NAND
+
+Board model identifiers are `W25N01KV`, `GD5F1GQ5UExxH` (3.3 V ID), and
+`GD5F1GQ5RExxH` (1.8 V ID). Flash can share SPI1 with sensors on separate CS
+pins; it receives no sensor CSV data or sensor-rate scheduling.
+
+Build and run the synthetic NAND acceptance fixture from the repository root
+after setup:
+
+```bash
+mkdir -p tests/fixtures/firmware/build
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -ffreestanding -fno-builtin \
+  -Os -Wall -Wextra -Werror -nostdlib -Wl,--gc-sections \
+  -T tests/fixtures/firmware/linker.ld tests/fixtures/firmware/spi_nand.c \
+  -o tests/fixtures/firmware/build/spi_nand.elf
+reflight run --firmware tests/fixtures/firmware/build/spi_nand.elf \
+  --board example-configs/stm32f407vg-flash.yaml \
+  --output-dir /tmp/reflight-flash --max-instructions 60000
+```
+
+Expected USART bytes for the example Winbond board are `EF AE 50` (`50` is
+the fixture's `P` success marker), with one PB1 rising event. The fixture
+detects either supported GigaDevice variant too; change the board's flash
+`model` to select it. The [mixed firmware example](docs/reference.md#mixed-flash-and-sensor-example)
+adds changing sensor measurements and simulation timestamps.
+
+For an explicit 128 MiB main-array dump, use
+[the export board](example-configs/stm32f407vg-flash-export.yaml) instead.
+It adds `outputs.flash: [{device: SPI1.PA7, file: flash.bin}]`. No flash image
+is written by default, and spare bytes are excluded. See the
+[flash reference](docs/reference.md#external-spi-nand) for commands, unlock
+sequences, timing, feature differences, and limitations. These synthetic
+fixtures do not establish compatibility with production firmware drivers.
 
 ## Tests
 

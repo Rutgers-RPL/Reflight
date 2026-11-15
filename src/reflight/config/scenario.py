@@ -8,6 +8,7 @@ import yaml
 
 from .board import BoardConfig, ConfigError, _mapping, _string
 from reflight.sensors import SensorError, make_sensor
+from reflight.devices import is_flash_model
 from reflight.simulation.csv_data import CSVData
 
 
@@ -100,7 +101,8 @@ def load_scenario(path: str | Path, board: BoardConfig) -> ScenarioConfig:
     if default not in sources:
         raise ConfigError(f"unknown default_source {default}")
     endpoints = {f"{bus.name}.{device.cs if bus.kind == 'spi' else f'0x{device.address:02x}'}": device.model
-                 for bus in board.buses for device in bus.devices}
+                 for bus in board.buses for device in bus.devices
+                 if not is_flash_model(device.model)}
     models = set()
     for model in endpoints.values():
         if model in models:

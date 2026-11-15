@@ -18,6 +18,207 @@ reflight run --firmware "$reflight_repo/tests/fixtures/firmware/build/simulated_
 
 Consuming firmware projects supply their own ELF, board YAML, scenario, CSV and output directory; no runtime repository paths are hardcoded.
 
+## Sparse NAND storage
+
+The storage layer is available through `reflight.flash.NandStorage`.
+It has 1024 blocks of 64 pages, each with 2048 main bytes and a required
+`spare_bytes=64` (GigaDevice geometry) or `spare_bytes=96` (Winbond geometry).
+Untouched pages are implicit FF bytes; only non-erased pages occupy storage.
+
+```python
+from reflight.flash import NandStorage
+
+array = NandStorage(spare_bytes=96)
+array.program_page(0, 2047, b"\x12\x34")  # Last main byte, first spare byte.
+assert array.read_page(0, 2047, 2) == b"\x12\x34"
+array.program_page(0, 2047, b"\xff")
+assert array.read_page(0, 2047, 1) == b"\x12"  # Programming only clears bits.
+first_main_page = next(array.iter_main_pages())
+assert len(first_main_page) == 2048  # Spare bytes are excluded.
+array.erase_block(0)  # Block index, not page row; restores main and spare to FF.
+```
+
+`read_page(row, column=0, length=None)` defaults to the rest of the page,
+including spare bytes. All accesses reject invalid indices or regions extending
+past the page with `NandStorageError`; indices never wrap or truncate. A column
+must name an existing byte even for an empty read or write.
+`iter_main_pages()` streams all 65,536 main pages in physical order, including
+FF gaps, totaling 134,217,728 bytes without allocating a full image. Consume
+the iterator without retaining every page, and do not mutate the array during
+iteration.
+
+This storage layer has no command parsing, ECC, protection, BUSY timing,
+persistence, or program-order/partial-program-count policy. The flash models
+below own protocol behavior, retaining the existing `select()`,
+`exchange_byte()`, `deselect()`, optional `tick(count)` boundary.
+
+## External SPI-NAND
+
+The external-device factory `reflight.devices.make_device()` and
+`build_spi_bus()` build sensors and flash on the same generic bus. Existing
+`make_sensor()` and sensor-package `build_spi_bus()` callers remain supported.
+Flash has no `SimulationInputs` API, CSV source assignment, or sensor schedule.
+Repeated flash models are allowed in scenarios; sensor model names still must
+be unique. Unknown model names fail explicitly.
+
+| Board identifier | Read-ID bytes after one dummy byte | Main + spare bytes/page | Power-on A0 / B0 |
+| --- | --- | --- | --- |
+| `W25N01KV` | `EF AE 21` | 2048 + 96 | `7C` / `19` |
+| `GD5F1GQ5UExxH` | `C8 31` | 2048 + 64 | `38` / `10` |
+| `GD5F1GQ5RExxH` | `C8 21` | 2048 + 64 | `38` / `10` |
+
+There is no ambiguous `GD5F1GQ5xExxH` model alias. See the
+[board example](../example-configs/stm32f407vg-flash.yaml): flash is SPI1/PA7,
+ICM45686 is SPI1/PA4, telemetry is USART2, and capture observes PB1.
+Unconnected WP/HOLD inputs are assumed inactive.
+
+Command frames below list MOSI bytes after CS goes low. Data returned during
+headers/dummy clocks is FF. Every CS-low interval starts a fresh command;
+state changes commit when CS rises. Incomplete fixed frames are ignored.
+
+| Operation | Standard SPI frame | Behavior |
+| --- | --- | --- |
+| ID | `9F dummy`, then response clocks | Three Winbond or two GigaDevice ID bytes, then FF |
+| Get feature | `0F address`, then response clocks | Repeats current feature value; Winbond also accepts `05` |
+| Set feature | `1F address value` | Volatile writable bits only; Winbond also accepts `01` |
+| Write enable/disable | `06` / `04` | Sets/clears WEL |
+| Page to cache | `13 row[23:16] row[15:8] row[7:0]` | Pending array read; cache updates at completion |
+| Read cache | `03` or `0B`, two column bytes, one dummy byte, response clocks | Sequential cache bytes; FF after page end |
+| Load cache | `02`, two column bytes, one or more data bytes | Clears unfilled cache bytes to FF |
+| Random load | `84`, two column bytes, one or more data bytes | Preserves other cache bytes |
+| Program execute | `10`, three row bytes | ANDs cache into physical page after completion |
+| Block erase | `D8`, three row bytes | Erases the 64-page block containing that row |
+| Soft reset | `FF` | Cancels pending operation; clears WEL/failures; retains cache/features |
+| Power-on reset | Separate `66`, then `99` transactions | Restores feature defaults; NAND contents survive |
+
+Both chips use only the low 12 column bits: high four bits are documented
+dummy bits. Effective columns past 2143/2111 raise `FlashError`, never wrap.
+Loads starting in bounds ignore excess tail data beyond the cache, as
+specified by both datasheets. Winbond explicitly ignores the high row byte;
+GigaDevice's 24-bit row frame rejects values above 65535. This deliberately
+distinguishes explicit dummy bits from invalid effective addresses.
+
+Both power up fully protected. Firmware unlocks with `1F A0 00` (no WREN
+required for feature writes). For Winbond, send `06` **before** `02`/`84`,
+then `10 row`; for GigaDevice, `02`/`84` may precede `06`, which is required
+before `10`. Both require `06` before `D8`. Missing WREN ignores the operation.
+The fixture detects the chip and exercises its respective ordering.
+
+Read C0 with `0F C0`: bit 0 is BUSY/OIP, bit 1 WEL, bit 2 E_FAIL, bit 3
+P_FAIL; ECC error bits remain zero for these uncorrupted models. Accepted
+program/erase completion clears WEL. Winbond also clears WEL on page reads;
+GigaDevice retains it. Protected attempts set the corresponding failure bit.
+GigaDevice leaves OIP clear on protected attempts (its §12.5); Winbond uses a
+finite pending failure. A subsequent unprotected corresponding operation
+clears the failure bit; soft reset clears both.
+
+Winbond supports all BP3:0/TB protection ranges (including power lock through
+SRP1/SRP0), ECC-E, ODS/H-DIS, fixed BUF=1, and extended ECC feature reads
+10/20/30/40/50. BFD in 10 is writable with thresholds 1–3; error reports are
+zero. A/B/C feature addresses accept the documented low-nibble don't-care
+bits. GigaDevice uses its separate BP2:0/INV/CMP table, including the table's
+CMP=1/BP=110 block-0 case. Its A0 mask is BE, B0 supports ECC_EN/BPL/QE,
+D0 supports driver strength bits 6:5, and F0 reports the selected row's block
+protection status in bit 3. BPL is modeled as the datasheet's special-order
+power lock feature; it stays set until power-on reset. Read-only status bits
+ignore feature writes; reserved GigaDevice bits read zero. OTP modes and
+Winbond SR1-L OTP locking raise explicit unsupported errors.
+
+`FF` keeps volatile feature settings and cache contents, with no page-0 reload.
+`66` followed immediately by `99` restores power-on defaults; GigaDevice also
+reloads page 0 into cache, while Winbond uses the default no-reload option.
+Reset atomically cancels pending writes/erases without introducing simulated
+power-cut corruption or deleting committed NAND bytes.
+
+BUSY advances through the existing `SpiBus.tick(count)` hook: read 512 ticks,
+program 1024, erase 2048, reset 128. Runtime ticks once before each executed
+instruction, with no new simulation clock. These are deterministic logical
+delays, **not cycle-accurate datasheet timings**. Polling GET FEATURES is
+available throughout pending operations, including reset. Winbond also permits
+ID while busy; GigaDevice ignores ID. Other busy commands are ignored except
+reset commands. A command ignored at its opcode stays ignored until CS rises,
+even if BUSY clears mid-frame.
+
+With ECC enabled, Winbond ignores user programming of IC-managed columns
+840–85F, leaving erased parity bytes FF; it does not generate parity. Data
+previously programmed there with ECC disabled stays until erase. With ECC
+disabled all 96 spare bytes are available; all 64 GigaDevice spare bytes are
+available in either setting. No parity generation or bit correction is claimed.
+Both models have no stochastic errors, wear, bad-block generation, program
+ordering/partial-program-count enforcement, OTP/UID/parameter pages, image
+import, or cross-run persistence. Multi-lane/DTR opcodes 3B/6B/BB/EB/EE and
+32/34/C4 fail explicitly; other unimplemented opcodes fail too. Hardware reset
+signaling, WP/HOLD pin changes, and production-driver compatibility are
+unverified. Only standard single-lane SPI1 polling is supported.
+
+Protocol references are local Markdown datasheets: Winbond W25N01KV Rev H
+§§7–8.2 (Figure 11 reset defaults, §7.5 protection, §7.2.4 parity area), and
+GigaDevice GD5F1GQ5xExxH Rev 1.4 §§3–4, 6–12 (Tables 12-1/2/7).
+
+### Optional flash image
+
+Add this optional entry under board `outputs`, alongside telemetry/capture:
+
+```yaml
+flash:
+  - {device: SPI1.PA7, file: flash.bin}
+```
+
+Each reference must name a configured flash device. Filenames must be single
+safe names under `--output-dir` and must differ from raw/decoded telemetry,
+capture, and all other flash output names. Validation happens before firmware
+execution. Library callers pass the live bus as
+`write_configured_outputs(trace, board, output_dir, spi_bus=bus)`; the optional
+keyword preserves prior callers when no flash export is configured.
+
+After successful execution, export streams exactly **134,217,728 bytes** per
+selected device, main data only, ascending physical page order, with FF gaps.
+It includes completed program/erase results, excludes spare bytes, and does
+not finish a pending flash operation after firmware execution stops. Images
+are written to temporary files in the destination directory and renamed only
+after completion; errors fail the run and remove incomplete flash artifacts.
+An older image is preserved on write failure. Earlier completed legacy outputs
+or another completed image may remain if a later export fails. No whole-image
+allocation or automatic dump occurs. The
+[export example board](../example-configs/stm32f407vg-flash-export.yaml) enables
+one image explicitly.
+
+### Mixed flash and sensor example
+
+From the repository root after setup:
+
+```bash
+mkdir -p tests/fixtures/firmware/build
+arm-none-eabi-gcc -mcpu=cortex-m4 -mthumb -ffreestanding -fno-builtin \
+  -DMIXED_SENSOR -Os -Wall -Wextra -Werror -nostdlib -Wl,--gc-sections \
+  -T tests/fixtures/firmware/linker.ld tests/fixtures/firmware/spi_nand.c \
+  -o tests/fixtures/firmware/build/spi_nand_mixed.elf
+reflight config validate --board example-configs/stm32f407vg-flash.yaml \
+  --scenario example-configs/flash-sensor-scenario.yaml
+reflight run --firmware tests/fixtures/firmware/build/spi_nand_mixed.elf \
+  --board example-configs/stm32f407vg-flash.yaml \
+  --scenario example-configs/flash-sensor-scenario.yaml \
+  --output-dir /tmp/reflight-flash-mixed --max-instructions 60000
+```
+
+UART contains the two ID bytes and `P`, followed by four `S` + big-endian
+signed 16-bit ICM accel-X readings. The CSV ramps from zero to 1 g over 0.5 s;
+the 100 Hz sensor publishes changing counts independently of flash operations.
+PB1 rises after the NAND checks pass. UART/GPIO use simulation timestamps;
+the run ends at 0.25 s. No flash sensor entry or input keys exist.
+
+To run outside the repository, after building:
+
+```bash
+reflight_repo="$PWD"
+cd /tmp
+"$reflight_repo/.venv/bin/reflight" run \
+  --firmware "$reflight_repo/tests/fixtures/firmware/build/spi_nand_mixed.elf" \
+  --board "$reflight_repo/example-configs/stm32f407vg-flash.yaml" \
+  --scenario "$reflight_repo/example-configs/flash-sensor-scenario.yaml" \
+  --output-dir /tmp/reflight-flash-external --max-instructions 60000
+```
+
 ## Example outputs
 
 The README example reads ICM45686 and BMI088Accel measurements from one CSV at different model rates, plus an MS5611 using a separate pressure/temperature mapping of that CSV. It ends at 0.08 seconds with stop reason `duration` after 16000 instructions.
@@ -53,7 +254,7 @@ sensors:
 
 `columns` maps sensor input keys to CSV headers. Existing scenarios using the former header-to-key direction must reverse each pair. Multiple input keys may reference the same CSV header.
 
-Scenario sensors are identified by their board model (`ICM45686`, `BMI088Accel`, `MS5611`, etc.). Bus and chip-select wiring stays in the board YAML. Replace former endpoint keys such as `SPI1.PA4` with their model names. Model names must be unique across the board for a scenario; repeated models are rejected as ambiguous. Static runs without a scenario still support repeated models. Omitted sensor entries use `default_source`. Only CSV sources used by attached sensors are loaded and constrain termination; unused CSV sources are not opened.
+Scenario sensors are identified by their board model (`ICM45686`, `BMI088Accel`, `MS5611`, etc.). Bus and chip-select wiring stays in the board YAML. Replace former endpoint keys such as `SPI1.PA4` with their model names. Sensor model names must be unique across the board for a scenario; repeated sensor models are rejected as ambiguous. Flash models are excluded from this requirement and from source assignment. Static runs without a scenario still support repeated models. Omitted sensor entries use `default_source`. Only CSV sources used by attached sensors are loaded and constrain termination; unused CSV sources are not opened.
 
 CSV must be comma-separated with a single header row first, exact configured header names (including spaces/units), and at least one data row. Remove export comment/preamble lines before use. Duplicate headers, malformed rows, missing mapped columns, nonnumeric/nonfinite mapped values, and non-increasing timestamps fail before execution. Unmapped columns are ignored. Timestamps are seconds; each file's first timestamp is normalized to zero. Numeric values interpolate linearly across nonuniform intervals. A single-row file ends at zero. Requests outside the available interval fail; there is no extrapolation.
 
@@ -143,4 +344,4 @@ python -m pytest -q tests/integration
 python -m pytest -q
 ```
 
-Integration tests compile fresh ARM firmware and verify SPI reads, independent sample rates, mixed sources, seeded output repeatability, firmware GPIO decisions, decoder timestamps, SysTick interrupts, duration-first/CSV-first/tied/default-only stops, and the instruction cap. All five endpoints also have datasheet-derived golden-value conversion tests, and compiled firmware reads SI-driven samples from every endpoint. Broader MCU/I²C runtime support, physical flight modeling, external flash, Phase 6 assertions/reports, and Phase 7 packaging/CI remain outside this implementation.
+Integration tests compile fresh ARM firmware and verify SPI reads, independent sample rates, mixed sources, seeded output repeatability, firmware GPIO decisions, decoder timestamps, SysTick interrupts, duration-first/CSV-first/tied/default-only stops, and the instruction cap. All five sensor endpoints have datasheet-derived golden-value conversion tests, and compiled firmware reads SI-driven samples from every endpoint. NAND fixtures verify all three part identifiers, erase/program/read/status, 0→1 prevention, reset preservation, mixed sensor playback, UART/GPIO, and optional main-array export. Broader MCU/I²C runtime support, physical flight modeling, Phase 7 assertions/reports, and Phase 8 packaging/CI remain outside this implementation.

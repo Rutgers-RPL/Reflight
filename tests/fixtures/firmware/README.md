@@ -66,3 +66,30 @@ mappings. It checks UART bytes against independent datasheet values (1 g,
 and explicit raw-injection tests retain their original expectations. Unit tests
 cover negative Celsius BMP581 encoding, MS5611 cold compensation and changed
 PROM coefficients, every IMU range, saturation and invalid inputs.
+
+## External NAND fixture
+
+`spi_nand.c` uses direct STM32F407 SPI1 registers with flash CS on PA7,
+USART2 output, and PB1 success indication. It detects Winbond `EF AE 21` or
+GigaDevice `C8 31`/`C8 21`, unlocks the chip, erases block 0, programs and
+reads nontrivial data across the 2047/2048 main/spare boundary, polls status,
+checks default protection failure, missing-WREN erase rejection, attempted
+0→1 programming, soft-reset preservation, and a second erase. It asserts
+BUSY is observed before successful read/program/erase completion and follows
+the detected chip's WREN-before-load versus load-before-WREN order.
+It then leaves `3C C3` at row 64, columns 1–2 for export checks. UART emits
+the first two ID bytes and `P` on success; `F` indicates a failed check and
+`T` a polling timeout. Firmware loops after completion; select the documented
+instruction budget so all checks execute.
+
+Build with `-DMIXED_SENSOR` to add ICM45686 on PA4 at ±32 g, followed by
+four `S` + signed big-endian 16-bit accel-X records. Its matching scenario
+maps only the sensor to changing CSV inputs. See the root
+[build/run example](../../../README.md#external-spi-nand) and
+[mixed example](../../../docs/reference.md#mixed-flash-and-sensor-example).
+
+Run `.venv/bin/python -m pytest -q tests/integration/test_flash_cli.py` from
+the root: tests compile fresh ARM ELFs and invoke the public CLI for all
+three part identifiers, static and mixed playback, plus a firmware-driven
+128 MiB export. Direct Python storage mutation is used only by unit tests.
+These are synthetic fixtures, not executions of a production flash driver.

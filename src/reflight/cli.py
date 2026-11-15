@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         from reflight.config import load_board
         from reflight.emulation.qiling_runner import run_firmware, validate_board_runtime
         from reflight.outputs import write_configured_outputs
-        from reflight.sensors import build_spi_bus
+        from reflight.devices import build_spi_bus
 
         try:
             board = load_board(args.board)
@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
                 spi_bus=spi_bus,
                 clock=clock,
             )
-            write_configured_outputs(trace, board, args.output_dir)
+            write_configured_outputs(trace, board, args.output_dir, spi_bus=spi_bus)
         except Exception as exc:
             print(f"reflight: {exc}", file=sys.stderr)
             return 1

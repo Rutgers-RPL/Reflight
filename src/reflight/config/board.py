@@ -46,6 +46,12 @@ class CaptureConfig:
 
 
 @dataclass(frozen=True)
+class FlashOutputConfig:
+    device: str
+    file: str
+
+
+@dataclass(frozen=True)
 class BoardConfig:
     path: Path
     model: str
@@ -54,6 +60,7 @@ class BoardConfig:
     buses: tuple[BusConfig, ...]
     telemetry: TelemetryConfig
     capture: CaptureConfig
+    flash_outputs: tuple[FlashOutputConfig, ...] = ()
 
 
 def _mapping(value: Any, where: str, required: set[str], allowed: set[str]) -> dict:
@@ -166,7 +173,7 @@ def load_board(path: str | Path) -> BoardConfig:
         buses.append(BusConfig(name, kind, tuple(devices)))
 
     outputs = _mapping(root["outputs"], "outputs", {"telemetry", "capture"},
-                       {"telemetry", "capture"})
+                       {"telemetry", "capture", "flash"})
     telemetry_raw = _mapping(
         outputs["telemetry"], "outputs.telemetry", {"peripheral", "file", "format"},
         {"peripheral", "file", "format", "handle", "packet_definition"},
@@ -220,4 +227,26 @@ def load_board(path: str | Path) -> BoardConfig:
         load_packet_definition(telemetry.packet_definition)
         if decoded_filename(telemetry.file) in (telemetry.file, capture.file):
             raise ConfigError("decoded telemetry and other output filenames must differ")
-    return BoardConfig(source, model, svd_path, index, tuple(buses), telemetry, capture)
+    flash_raw = outputs.get("flash", [])
+    if not isinstance(flash_raw, list):
+        raise ConfigError("outputs.flash must be a list")
+    from reflight.devices import is_flash_model
+    endpoints = {f"{bus.name}.{device.cs}": device.model
+                 for bus in buses if bus.kind == "spi" for device in bus.devices}
+    filenames = {telemetry.file, capture.file}
+    if telemetry.packet_definition is not None:
+        filenames.add(decoded_filename(telemetry.file))
+    flash_outputs = []
+    for number, raw_output in enumerate(flash_raw):
+        where = f"outputs.flash[{number}]"
+        item = _mapping(raw_output, where, {"device", "file"}, {"device", "file"})
+        endpoint = _string(item["device"], where + ".device")
+        if endpoint not in endpoints or not is_flash_model(endpoints[endpoint]):
+            raise ConfigError(f"{where}.device must reference a configured SPI flash: {endpoint}")
+        filename = _output_name(item["file"], where + ".file")
+        if filename in filenames:
+            raise ConfigError(f"{where}.file collides with another output: {filename}")
+        filenames.add(filename)
+        flash_outputs.append(FlashOutputConfig(endpoint, filename))
+    return BoardConfig(source, model, svd_path, index, tuple(buses), telemetry, capture,
+                       tuple(flash_outputs))

@@ -28,18 +28,6 @@ def make_sensor(model: str):
 
 
 def build_spi_bus(board: BoardConfig) -> SpiBus | None:
-    bus: SpiBus | None = None
-    for spec in board.buses:
-        if spec.kind == "i2c" and spec.devices:
-            raise SensorError(f"{spec.name} runtime controller transactions are not verified in Qiling 1.4.6")
-        if spec.kind != "spi" or not spec.devices:
-            continue
-        if spec.name != "SPI1":
-            raise SensorError(f"unsupported runtime SPI controller {spec.name}; tested: SPI1")
-        if bus is not None:
-            raise SensorError("multiple runtime SPI buses are unsupported")
-        bus = SpiBus(spec.name)
-        for device in spec.devices:
-            assert device.cs is not None
-            bus.attach(device.cs, make_sensor(device.model))
-    return bus
+    """Compatibility wrapper for existing sensor-only library callers."""
+    from reflight.devices import build_spi_bus as build_devices
+    return build_devices(board)
