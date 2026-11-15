@@ -1,4 +1,4 @@
-Time (s),Accel X (count),Accel Y (count),Accel Z (count)
-10,10,0,-10
-10.03,40,0,-40
-10.1,180,0,-180
+Time (s),Acceleration X (m/s^2),Acceleration Y (m/s^2),Acceleration Z (m/s^2),Pressure (Pa),Temperature (K)
+10,0.980665,0,-0.980665,101325,293.15
+10.03,3.92266,0,-3.92266,101325,293.15
+10.1,17.65197,0,-17.65197,101325,293.15

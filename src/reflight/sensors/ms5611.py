@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from .base import SensorError, SimulationInputs
 
 
@@ -17,13 +19,86 @@ def _ms_crc4(words: list[int]) -> int:
     return (remainder >> 12) & 0x0F
 
 
+def _trunc_div(numerator: int, denominator: int) -> int:
+    """Integer division with C-style truncation toward zero, including negatives."""
+    return (1 if numerator >= 0 else -1) * (abs(numerator) // denominator)
+
+
+def _compensation(d2: int, prom: list[int]) -> tuple[int, int, int]:
+    """Return centi-Celsius, offset, sensitivity; MS5611 datasheet pp8–9.
+
+    Every division truncates toward zero. Corrections use first-order TEMP,
+    including the additional below −15°C branch, before correcting TEMP itself.
+    """
+    _, c1, c2, c3, c4, c5, c6, _ = prom
+    dt = d2 - c5 * 256
+    temperature = 2000 + _trunc_div(dt * c6, 2**23)
+    offset = c2 * 2**16 + _trunc_div(c4 * dt, 2**7)
+    sensitivity = c1 * 2**15 + _trunc_div(c3 * dt, 2**8)
+    if temperature < 2000:
+        t2 = _trunc_div(dt * dt, 2**31)
+        off2 = _trunc_div(5 * (temperature - 2000)**2, 2)
+        sens2 = _trunc_div(5 * (temperature - 2000)**2, 4)
+        if temperature < -1500:
+            off2 += 7 * (temperature + 1500)**2
+            sens2 += _trunc_div(11 * (temperature + 1500)**2, 2)
+        temperature -= t2
+        offset -= off2
+        sensitivity -= sens2
+    return temperature, offset, sensitivity
+
+
+def _nearest_adc(target: int, evaluate) -> int:
+    """Bounded monotone integer search; equal output error selects lower ADC.
+
+    At most 24 bisections over the unsigned 24-bit ADC domain. An exact target
+    selects its first ADC code; no unbounded root-finding or extrapolation.
+    """
+    low, high = 0, 0xFFFFFF
+    if not evaluate(low) <= target <= evaluate(high):
+        raise SensorError("MS5611 target cannot be represented with this PROM")
+    while low < high:
+        middle = (low + high) // 2
+        if evaluate(middle) < target:
+            low = middle + 1
+        else:
+            high = middle
+    return min({low, max(0, low - 1)}, key=lambda adc: (abs(evaluate(adc) - target), adc))
+
+
 class MS5611(SimulationInputs):
     """TE MS5611 §§SPI commands, conversion/PROM sequences, CRC-4 appendix."""
 
-    input_groups = (("d1",), ("d2",))
+    input_groups = (("pressure",), ("temperature",))
     sample_rate_hz = 50
-    raw_range = (0, 0xFFFFFF)
-    default_inputs = {"d1": 9085466, "d2": 8569150}
+    default_inputs = {"pressure": 101325.0, "temperature": 293.15}
+
+    def publish_physical_sample(self, values: dict[str, float]) -> None:
+        # ENG_DS_MS5611-01BA03_B3.md pp8–9: inverse of integer firmware
+        # compensation, using the same coefficients returned by PROM reads.
+        pressure, temperature = values["pressure"], values["temperature"]
+        if not math.isfinite(pressure) or not 1000 <= pressure <= 120000:
+            raise SensorError("MS5611 pressure must be within 1000–120000 Pa")
+        if not math.isfinite(temperature) or not 233.15 <= temperature <= 358.15:
+            raise SensorError("MS5611 temperature must be within 233.15–358.15 K")
+        if len(self.prom) != 8 or any(type(c) is not int or not 0 <= c <= 0xFFFF
+                                      for c in self.prom[1:7]):
+            raise SensorError("MS5611 invalid PROM calibration coefficients")
+        target_t = round((temperature - 273.15) * 100)
+        target_p = round(pressure)
+        d2 = _nearest_adc(target_t, lambda adc: _compensation(adc, self.prom)[0])
+        actual_t, offset, sensitivity = _compensation(d2, self.prom)
+        if sensitivity <= 0:
+            raise SensorError("MS5611 PROM gives nonpositive compensated sensitivity")
+
+        def compensate_pressure(adc):
+            return _trunc_div(_trunc_div(adc * sensitivity, 2**21) - offset, 2**15)
+
+        d1 = _nearest_adc(target_p, compensate_pressure)
+        if abs(actual_t / 100 + 273.15 - temperature) > .010000001 \
+                or abs(compensate_pressure(d1) - pressure) > 1:
+            raise SensorError("MS5611 target cannot be represented within 0.01 K / 1 Pa")
+        self.set_raw_sample(d1=d1, d2=d2)
 
     def publish_sample(self, values: dict[str, int]) -> None:
         self.set_raw_sample(**values)

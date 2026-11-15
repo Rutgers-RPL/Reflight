@@ -60,7 +60,8 @@ def test_invalid_csv(tmp_path, content, message):
 
 def scenario(tmp_path, mutate):
     raw = yaml.safe_load(SCENARIO.read_text())
-    raw["sources"]["flight"]["csv_path"] = str(SCENARIO.parent / "raw-flight.csv")
+    for source in ("flight", "atmosphere"):
+        raw["sources"][source]["csv_path"] = str(SCENARIO.parent / "raw-flight.csv")
     mutate(raw)
     path = tmp_path / "scenario.yaml"
     path.write_text(yaml.safe_dump(raw))
@@ -70,10 +71,10 @@ def scenario(tmp_path, mutate):
 def test_binding_paths_active_sources(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cfg = load_scenario(SCENARIO, load_board(BOARD))
-    assert set(cfg.csv_data) == {"flight"}
-    assert cfg.sources["flight"].columns["accel_x"] == "Accel X (count)"
-    assert cfg.csv_data["flight"].values_at(0)["accel_x"] == 10
-    assert cfg.sensors["MS5611"].source == "built_in"
+    assert set(cfg.csv_data) == {"flight", "atmosphere"}
+    assert cfg.sources["flight"].columns["accel_x"] == "Acceleration X (m/s^2)"
+    assert cfg.csv_data["flight"].values_at(0)["accel_x"] == .980665
+    assert cfg.sensors["MS5611"].source == "atmosphere"
     assert cfg.sensors["ICM45686"].endpoint == "SPI1.PA4"
     assert cfg.sensors["BMI088Accel"].endpoint == "SPI1.PA6"
     cfg = scenario(tmp_path, lambda r: r["sensors"].clear())
@@ -136,9 +137,9 @@ def test_multiple_active_csv_endpoints_and_unused_short_source(tmp_path):
     (tmp_path / 'short.csv').write_text('t,p\n5,1\n5.015,2\n')
     def change(raw):
         raw['sources']['short'] = {'kind': 'openrocket', 'csv_path': 'short.csv',
-                                   'time_column': 't', 'columns': {'d1': 'p'}}
+                                   'time_column': 't', 'columns': {'pressure': 'p'}}
         raw['sources']['unused'] = {'kind': 'openrocket', 'csv_path': 'does-not-exist.csv',
-                                    'time_column': 't', 'columns': {'d1': 'p'}}
+                                    'time_column': 't', 'columns': {'pressure': 'p'}}
         raw['sensors']['MS5611'] = {'source': 'short'}
     cfg = scenario(tmp_path, change)
     assert set(cfg.csv_data) == {'short', 'flight'}
@@ -160,7 +161,7 @@ def test_model_binding_follows_board_wiring(tmp_path):
     runtime_bus = build_spi_bus(board)
     clock = build_simulation(cfg, runtime_bus)
     clock.advance(0)
-    assert runtime_bus.devices['PA3'].registers[1] == 10
+    assert runtime_bus.devices['PA3'].registers[1] == 102
     assert 'PA4' not in runtime_bus.devices
 
 
@@ -192,6 +193,14 @@ def test_multiple_input_keys_can_share_csv_header(tmp_path):
 
     def change(raw):
         raw['sources']['flight']['columns'] = {
-            key: 'Accel X (count)' for key in ('accel_x', 'accel_y', 'accel_z')}
+            key: 'Acceleration X (m/s^2)' for key in ('accel_x', 'accel_y', 'accel_z')}
     cfg = scenario(tmp_path, change)
-    assert cfg.csv_data['flight'].values_at(0) == {'accel_x': 10, 'accel_y': 10, 'accel_z': 10}
+    assert cfg.csv_data['flight'].values_at(0) == {'accel_x': .980665, 'accel_y': .980665, 'accel_z': .980665}
+
+
+@pytest.mark.parametrize('raw_key', ['d1', 'd2'])
+def test_ms_raw_scenario_keys_rejected(tmp_path, raw_key):
+    def change(raw):
+        raw['sources']['atmosphere']['columns'] = {raw_key: 'Pressure (Pa)'}
+    with pytest.raises(ConfigError, match='unsupported input keys'):
+        scenario(tmp_path, change)

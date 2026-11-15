@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from .base import SensorError, _RegisterSensor
 
 
@@ -11,8 +13,18 @@ class BMP581(_RegisterSensor):
     startup_dummy = True
     input_groups = (("temperature",), ("pressure",))
     sample_rate_hz = 25
-    raw_range = (0, 0xFFFFFF)
-    default_inputs = {"temperature": 0x7F7F7F, "pressure": 0x7F7F7F}
+    default_inputs = {"temperature": 293.15, "pressure": 101325.0}
+
+    def publish_physical_sample(self, values: dict[str, float]) -> None:
+        # bst-bmp581-ds004.md §4.5 p22, §§7.11–7.16 pp56–57:
+        # signed 24-bit fields, pressure Q6 Pa and temperature Q16 Celsius.
+        pressure, temperature = values["pressure"], values["temperature"]
+        if not math.isfinite(pressure) or not 30000 <= pressure <= 125000:
+            raise SensorError("BMP581 pressure must be within 30000–125000 Pa")
+        if not math.isfinite(temperature) or not 233.15 <= temperature <= 358.15:
+            raise SensorError("BMP581 temperature must be within 233.15–358.15 K")
+        self.set_raw_sample(pressure=round(pressure * 64),
+                            temperature=round((temperature - 273.15) * 65536) & 0xFFFFFF)
 
     def publish_sample(self, values: dict[str, int]) -> None:
         self.set_raw_sample(**values)
@@ -46,6 +58,7 @@ class BMP581(_RegisterSensor):
 
     def set_raw_sample(self, *, temperature: int | None = None,
                        pressure: int | None = None) -> None:
+        """Inject exact unsigned 24-bit bit patterns (including signed temperature)."""
         for base, value in ((0x1D, temperature), (0x20, pressure)):
             if value is not None:
                 if not 0 <= value <= 0xFFFFFF:

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from .base import SensorError, _RegisterSensor, _axes
 
 
@@ -11,6 +13,23 @@ class ICM45686(_RegisterSensor):
     input_groups = (("accel_x", "accel_y", "accel_z"), ("gyro_x", "gyro_y", "gyro_z"))
     sample_rate_hz = 100
     default_inputs = {f"{group}_{axis}": 0 for group in ("accel", "gyro") for axis in "xyz"}
+
+    def publish_physical_sample(self, values: dict[str, float]) -> None:
+        # TDK_DS_000577_ICM_45686.md §§3.1–3.2 (pp18–19),
+        # §§17.26–17.27 (pp79–80): published 16-bit sensitivities.
+        accel_fs = self.registers[0x1B] >> 4
+        gyro_fs = self.registers[0x1C] >> 4
+        if accel_fs > 4 or gyro_fs > 8:
+            raise SensorError("unsupported ICM45686 full scale")
+        accel_scale = (1024, 2048, 4096, 8192, 16384)[accel_fs]
+        gyro_scale = (8.2, 16.4, 32.8, 65.5, 131, 262, 524.3, 1048.6, 2097.2)[gyro_fs]
+        raw = {}
+        for axis in "xyz":
+            raw[f"accel_{axis}"] = round(max(-32768, min(32767,
+                values[f"accel_{axis}"] / (9.80665 / accel_scale))))
+            raw[f"gyro_{axis}"] = round(max(-32768, min(32767,
+                math.degrees(values[f"gyro_{axis}"]) * gyro_scale)))
+        self.publish_sample(raw)
 
     def publish_sample(self, values: dict[str, int]) -> None:
         self.set_raw_sample(accel=tuple(values[f"accel_{axis}"] for axis in "xyz"),

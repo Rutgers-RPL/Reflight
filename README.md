@@ -42,7 +42,7 @@ reflight run \
   --max-instructions 30000
 ```
 
-The fixture reads simulated sensors over SPI, emits binary telemetry, and raises PB1 when an accelerometer reading reaches 50 raw counts. The run ends at 0.08 simulated seconds and writes:
+The fixture reads simulated sensors over SPI, emits binary telemetry, and raises PB1 when the ICM acceleration reaches 512 counts (4.903325 m/s² at its configured ±32 g range). The run ends at 0.08 simulated seconds and writes:
 
 - `telemetry.bin` — captured USART2 bytes.
 - `telemetry.decoded.csv` — decoded sensor readings with simulation timestamps.
@@ -60,7 +60,22 @@ Supply your ELF, board YAML, scenario, CSV inputs, and output directory through 
 
 Paths inside YAML are relative to that YAML file. CLI paths are relative to the working directory. Omit `--scenario` for static sensor inputs.
 
-CSV values are linearly interpolated; current sensor models expect raw register values. Runs stop at the first active CSV endpoint or configured duration, subject to the instruction cap. Set `--max-instructions` high enough for your scenario; the default is 1000.
+Scenario CSV values are physical SI measurements, linearly interpolated before each sensor model converts them to firmware-visible registers:
+
+| Input keys | Units |
+| --- | --- |
+| `accel_x`, `accel_y`, `accel_z` | m/s², sensor-frame specific force |
+| `gyro_x`, `gyro_y`, `gyro_z` | rad/s, sensor-frame angular velocity |
+| `pressure`, `temperature` | Pa absolute, K absolute |
+| Configured time column | seconds |
+
+Supply complete axis groups. Reflight adds no gravity and rotates no axes: a stationary accelerometer normally measures about 9.80665 m/s² along an axis; free fall measures near zero. Bias and noise use the same SI units and apply once before conversion. Omitted groups retain their last unadjusted physical input; initial scenario defaults are zero axes and 101325 Pa / 293.15 K. Without a scenario, static register/ADC defaults remain available.
+
+IMU sensitivity follows the firmware-written full-scale registers at the next scheduled sample. Counts round to nearest, ties to even, and saturate to signed 16-bit limits. Barometers reject nonfinite, out-of-range or unrealizable samples with `SensorError`; supported ranges and formulas are in the [reference](docs/reference.md#physical-inputs-and-conversion). `set_raw_sample`, raw `publish_sample`, and `SpiBus.inject_raw` remain separate register/protocol APIs.
+
+**Migration:** the historical `raw-flight.csv` / `raw-flight-scenario.yaml` filenames are retained, but their values are now SI. Convert former count-based CSV values and bias/noise to physical units. MS5611 scenario keys are `pressure` / `temperature`; `d1` / `d2` are accepted only by raw APIs. CSV header names are arbitrary and mapped explicitly; there is no unit guessing or raw-CSV mode.
+
+Runs stop at the first active CSV endpoint or configured duration, subject to the instruction cap. Set `--max-instructions` high enough for your scenario; the default is 1000.
 
 Timing is deterministic, not cycle-accurate. The supported SPI subset is master, 8-bit, mode 0, software chip select, and polling.
 

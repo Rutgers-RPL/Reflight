@@ -35,12 +35,20 @@ The test that runs the compiled fixture skips if `build/fixture.elf` is absent;
 build it first to exercise the actual ARM instructions. The other two tests
 exercise repeated BSRR/ODR writes against Qiling's STM32F4 GPIO model.
 
-## Phase 4 fixtures
+## Scenario fixtures
 
 `simulated_flight.c` polls ICM45686 accel X (PA4), BMI088Accel accel X (PA6),
 and MS5611 D1 (PA5) through SPI1. It emits `A5 5A`, then two signed 16-bit
 little-endian accel readings and one unsigned 32-bit little-endian ADC reading.
-PB1 goes high when the firmware's ICM reading reaches 50 raw counts. The
+The firmware explicitly programs ±32 g on ICM45686 and ±6 g on BMI088Accel.
+PB1 goes high at 512 ICM counts, equivalent to 4.903325 m/s² sensor-axis
+specific force. The SI CSV begins at 0.980665 m/s²: ICM reports 102 counts,
+BMI reports 546; their independent 100 Hz / 200 Hz updates produce different
+latched readings as the acceleration increases. MS5611 maps 101325 Pa /
+293.15 K through its PROM compensation inverse to D1=9155145, D2=8566488;
+this differs from its unchanged static/raw default. Telemetry fields remain raw
+sensor values, while scenario CSV inputs and adjustments are physical SI.
+No gravity or coordinate transform is applied. The
 matching board, CSV scenario, packet definition, and Linux build/run commands
 are linked from the [root README](../../../README.md); timing limits are in the
 [reference](../../../docs/reference.md#virtual-time-and-termination). This is a synthetic
@@ -50,3 +58,11 @@ acceptance fixture, not production flight firmware.
 emitting `T`. Its integration test verifies that virtual sensor scheduling
 preserves Qiling's hardware/NVIC progression. The new integration tests
 compile these fixtures freshly rather than depending on build artifacts.
+
+`test_si_all_sensors.py` compiles the unchanged `four_sensors.c` polling fixture
+and supplies SI CSV data to all five endpoints through explicit per-model
+mappings. It checks UART bytes against independent datasheet values (1 g,
+10 degree/s expressed in rad/s, ambient pressure/temperature), while the static
+and explicit raw-injection tests retain their original expectations. Unit tests
+cover negative Celsius BMP581 encoding, MS5611 cold compensation and changed
+PROM coefficients, every IMU range, saturation and invalid inputs.

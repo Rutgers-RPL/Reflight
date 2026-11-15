@@ -1,4 +1,4 @@
-"""Shared raw input validation, sample publication, and register-oriented SPI framing."""
+"""Shared SI input preparation and register-oriented SPI framing."""
 
 from __future__ import annotations
 
@@ -11,11 +11,10 @@ class SensorError(ValueError):
 
 
 class SimulationInputs:
-    """Raw measurement channels accepted by a model; groups must be complete."""
+    """Sensor-axis SI channels; acceleration is specific force, with no added gravity."""
 
     input_groups: tuple[tuple[str, ...], ...] = ()
-    raw_range = (-32768, 32767)
-    default_inputs: dict[str, int] = {}
+    default_inputs: dict[str, float] = {}
 
     @classmethod
     def validate_input_keys(cls, keys: set[str]) -> None:
@@ -29,18 +28,37 @@ class SimulationInputs:
     def update_measurements(self, values: dict[str, float], *,
                             bias: dict[str, float], noise: dict[str, float],
                             rng: Random) -> None:
-        """Latch one raw sample. Python round uses nearest integer, ties to even."""
+        """Prepare one SI sample, applying adjustments once in stable channel order.
+
+        Omitted groups retain unadjusted physical inputs, never encoded counts or
+        previously adjusted values. A failed publication does not advance them.
+        """
         self.validate_input_keys(set(values))
-        raw = {}
-        low, high = self.raw_range
-        for key, default in sorted(self.default_inputs.items()):
-            value = values.get(key, default) + bias.get(key, 0)
+        supported = set(self.default_inputs)
+        for settings in (bias, noise):
+            if set(settings) - supported:
+                raise SensorError(f"unsupported adjustment keys: {sorted(set(settings) - supported)}")
+            if any(not math.isfinite(value) for value in settings.values()):
+                raise SensorError("adjustments must be finite")
+        if any(value < 0 for value in noise.values()):
+            raise SensorError("noise standard deviation must be nonnegative")
+        inputs = {**getattr(self, "_physical_inputs", self.default_inputs), **values}
+        adjusted = {}
+        for key, value in sorted(inputs.items()):
+            if not math.isfinite(value):
+                raise SensorError(f"{key}: physical input must be finite")
+            value += bias.get(key, 0)
             if noise.get(key, 0):
                 value += rng.gauss(0, noise[key])
-            if math.isnan(value):
-                raise SensorError(f"{key}: sample became NaN")
-            raw[key] = round(min(high, max(low, value)))
-        self.publish_sample(raw)
+            if not math.isfinite(value):
+                raise SensorError(f"{key}: adjusted sample must be finite")
+            adjusted[key] = value
+        self.publish_physical_sample(adjusted)
+        self._physical_inputs = inputs
+
+    def publish_physical_sample(self, values: dict[str, float]) -> None:
+        """Encode a prepared SI sample inside the receiving sensor model."""
+        raise NotImplementedError
 
     def publish_sample(self, values: dict[str, int]) -> None:
         raise NotImplementedError

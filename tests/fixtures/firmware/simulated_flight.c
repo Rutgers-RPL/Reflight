@@ -1,6 +1,6 @@
-/* Synthetic Phase 4 telemetry from actual SPI1 reads, with a firmware decision.
+/* Synthetic SI-scenario telemetry from actual SPI1 reads, with a firmware decision.
  * Packet: A5 5A, ICM accel X i16le, BMI accel X i16le, MS D1 u32le.
- * PB1 is high iff the ICM reading is at least 50 raw counts.
+ * PB1 is high iff the ICM reading is at least 512 counts (4.903325 m/s^2 specific force at ±32 g).
  */
 #include <stdint.h>
 #define REG32(a) (*(volatile uint32_t *)(a))
@@ -58,10 +58,12 @@ void Reset_Handler(void) {
     REG32(0x4000440cu) = 0x2008u;
     REG32(0x40013000u) = 0x344u;
     (void)bmi(); /* Initial CS read selects BMI088 SPI mode. */
+    cs(4, 0); (void)spi(0x1b); (void)spi(0x06); cs(4, 1); /* ±32 g */
+    cs(6, 0); (void)spi(0x41); (void)spi(0x01); cs(6, 1); /* ±6 g */
     for (;;) {
         int16_t a = icm(), b = bmi();
         uint32_t pressure = ms();
-        GPIOB_BSRR = 1u << (a >= 50 ? 1u : 17u);
+        GPIOB_BSRR = 1u << (a >= 512 ? 1u : 17u);
         uart(0xa5); uart(0x5a); word((uint16_t)a); word((uint16_t)b);
         word((uint16_t)pressure); word((uint16_t)(pressure >> 16));
     }

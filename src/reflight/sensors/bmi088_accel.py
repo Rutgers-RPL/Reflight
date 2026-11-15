@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .base import _RegisterSensor, _axes
+from .base import SensorError, _RegisterSensor, _axes
 
 
 class BMI088Accel(_RegisterSensor):
@@ -13,6 +13,16 @@ class BMI088Accel(_RegisterSensor):
     input_groups = (("accel_x", "accel_y", "accel_z"),)
     sample_rate_hz = 200
     default_inputs = {f"accel_{axis}": 0 for axis in "xyz"}
+
+    def publish_physical_sample(self, values: dict[str, float]) -> None:
+        # bst-bmi088-ds001.md §5.3.4 p27, §5.3.11 p30:
+        # g = raw / 32768 * 2**(ACC_RANGE + 1) * 1.5.
+        setting = self.registers[0x41]
+        if setting not in range(4):
+            raise SensorError("unsupported BMI088Accel full scale")
+        full_scale_g = 3 * 2**setting
+        self.publish_sample({key: round(max(-32768, min(32767,
+            value / 9.80665 / full_scale_g * 32768))) for key, value in values.items()})
 
     def publish_sample(self, values: dict[str, int]) -> None:
         self.set_raw_sample(accel=tuple(values[f"accel_{axis}"] for axis in "xyz"))
@@ -34,6 +44,8 @@ class BMI088Accel(_RegisterSensor):
             self.reset()
             self._spi_ready = False
         elif address in (0x40, 0x41, 0x7C, 0x7D):
+            if address == 0x41 and value not in range(4):
+                raise SensorError("unsupported BMI088Accel full scale")
             self.registers[address] = value
         else:
             super().write_register(address, value)

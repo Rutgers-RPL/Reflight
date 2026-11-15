@@ -27,12 +27,17 @@ def test_dynamic_reads_and_firmware_gpio(compile_arm, tmp_path):
     for channel in (0, 1):
         values = [p[channel] for p in packets]
         assert values == sorted(values)
-        assert values[0] == 10
-        assert values[-1] >= 70
+        assert values[0] == (102 if channel == 0 else 546)
+        assert values[-1] >= (1100 if channel == 0 else 6000)
         assert len(set(values)) > 5
+    for channel, (rate, scale) in enumerate(((100, 1024), (200, 32768/6))):
+        # Independent physical interpolation and each model's datasheet sensitivity.
+        golden = {round((.1 + 10*t if t <= .03 else .4 + 20*(t-.03))*scale)
+                  for t in (i/rate for i in range(int(.08*rate)+1))}
+        assert {p[channel] for p in packets} <= golden
     assert any(a[0] == b[0] for a, b in zip(packets, packets[1:]))
-    assert any(a != b for a, b, _ in packets)  # 100 Hz vs 200 Hz
-    assert all(ms == 9085466 for _, _, ms in packets)
+    assert any(a[0] == b[0] and a[1] != b[1] for a, b in zip(packets, packets[1:]))  # 100 Hz vs 200 Hz
+    assert all(ms == 9155145 for _, _, ms in packets)
     assert [(e.pin, e.level) for e in trace.gpio_transitions] == [('PB1', 1)]
     assert .04 <= trace.gpio_transitions[0].time_s < .05
     assert trace.stop_reason == 'duration'

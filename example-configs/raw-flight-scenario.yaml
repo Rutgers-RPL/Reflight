@@ -1,4 +1,4 @@
-# Raw model input keys map explicitly to CSV headers. Paths are YAML-relative.
+# SI sensor inputs map explicitly to CSV headers; filenames retained for compatibility. Paths are YAML-relative.
 simulation:
   duration_s: 0.08
   instructions_per_second: 200000
@@ -9,11 +9,19 @@ sources:
     csv_path: raw-flight.csv
     time_column: Time (s)
     columns:
-      accel_x: Accel X (count)
-      accel_y: Accel Y (count)
-      accel_z: Accel Z (count)
+      accel_x: Acceleration X (m/s^2)
+      accel_y: Acceleration Y (m/s^2)
+      accel_z: Acceleration Z (m/s^2)
+  atmosphere:
+    kind: openrocket
+    csv_path: raw-flight.csv
+    time_column: Time (s)
+    columns:
+      pressure: Pressure (Pa)
+      temperature: Temperature (K)
   built_in: {kind: default}
 default_source: built_in
 sensors:
   ICM45686: {source: flight}
   BMI088Accel: {source: flight}
+  MS5611: {source: atmosphere}

@@ -17,14 +17,15 @@ def files(tmp_path, *, duration=.08, default_only=False, seed=None):
     board_path = tmp_path / 'board.yaml'
     board_path.write_text(yaml.safe_dump(board))
     scenario = yaml.safe_load((ROOT / 'example-configs/raw-flight-scenario.yaml').read_text())
-    scenario['sources']['flight']['csv_path'] = str(ROOT / 'example-configs/raw-flight.csv')
+    for source in ('flight', 'atmosphere'):
+        scenario['sources'][source]['csv_path'] = str(ROOT / 'example-configs/raw-flight.csv')
     scenario['simulation']['duration_s'] = duration
     if default_only:
         scenario['sensors'] = {}
     if seed is not None:
         scenario['simulation']['random_seed'] = seed
-        scenario['sensors']['ICM45686']['noise'] = {'accel_x': 3}
-        scenario['sensors']['BMI088Accel']['bias'] = {'accel_y': 7}
+        scenario['sensors']['ICM45686']['noise'] = {'accel_x': .03}
+        scenario['sensors']['BMI088Accel']['bias'] = {'accel_y': .07}
     scenario_path = tmp_path / 'scenario.yaml'
     scenario_path.write_text(yaml.safe_dump(scenario))
     return board_path, scenario_path
@@ -64,15 +65,15 @@ def test_cli_stop_outcomes(compile_arm, tmp_path, duration, default_only, cap, r
     assert all(0 <= float(r['time_s']) < elapsed for r in decoded)
     if reason != 'instruction_cap':
         assert len(decoded) > 5
-        assert all(int(r['ms_d1']) == 9085466 for r in decoded)
+        assert all(int(r['ms_d1']) == 9155145 for r in decoded)
         if default_only:
             assert all(int(r['icm_accel_x']) == int(r['bmi_accel_x']) == 0 for r in decoded)
             assert (output / 'hardware_events.csv').read_text() == 'sequence,instruction_count,pc,pin,level,time_s\n'
         else:
-            def sample(t):
-                return round(10 + 1000*t if t <= .03 else 40 + 2000*(t-.03))
-            assert all(int(r['icm_accel_x']) in {sample(i / 100) for i in range(11)} for r in decoded)
-            assert all(int(r['bmi_accel_x']) in {sample(i / 200) for i in range(21)} for r in decoded)
+            def sample(t, scale):
+                return round((.1 + 10*t if t <= .03 else .4 + 20*(t-.03))*scale)
+            assert all(int(r['icm_accel_x']) in {sample(i / 100, 1024) for i in range(11)} for r in decoded)
+            assert all(int(r['bmi_accel_x']) in {sample(i / 200, 32768/6) for i in range(21)} for r in decoded)
             assert len({r['icm_accel_x'] for r in decoded}) > 3
 
 
@@ -122,4 +123,21 @@ def test_invalid_inputs_fail_before_firmware_or_outputs(compile_arm, tmp_path, i
     result = invoke(tmp_path / 'missing.elf', board, scenario, output, tmp_path)
     assert result.returncode != 0
     assert message in result.stderr
+    assert not output.exists()
+
+
+@pytest.mark.parametrize('pressure,temperature', [(0, 293.15), (101325, 100)])
+def test_unrealizable_physical_samples_fail_without_outputs(compile_arm, tmp_path, pressure, temperature):
+    elf = compile_arm('simulated_flight.c')
+    board, scenario = files(tmp_path)
+    csv_path = tmp_path / 'impossible.csv'
+    csv_path.write_text(f't,p,T\n0,{pressure},{temperature}\n1,{pressure},{temperature}\n')
+    raw = yaml.safe_load(scenario.read_text())
+    raw['sources']['atmosphere'].update(csv_path=str(csv_path), time_column='t',
+                                         columns={'pressure': 'p', 'temperature': 'T'})
+    scenario.write_text(yaml.safe_dump(raw))
+    output = tmp_path / 'no-output'
+    result = invoke(elf, board, scenario, output, tmp_path)
+    assert result.returncode != 0
+    assert 'MS5611' in result.stderr and 'must be within' in result.stderr
     assert not output.exists()
