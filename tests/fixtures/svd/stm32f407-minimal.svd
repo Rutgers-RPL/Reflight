@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Self-authored Phase 2 metadata fixture; not a vendor device definition. -->
+<device schemaVersion="1.3">
+  <name>STM32F407VG</name><version>1.0</version>
+  <description>Minimal Reflight STM32F407VG register fixture</description>
+  <addressUnitBits>8</addressUnitBits><width>32</width>
+  <peripherals>
+    <peripheral>
+      <name>SPI1</name><description>SPI bus</description><baseAddress>0x40013000</baseAddress>
+      <registers>
+        <register><name>CR1</name><addressOffset>0x00</addressOffset></register>
+        <register><name>CR2</name><addressOffset>0x04</addressOffset></register>
+        <register><name>SR</name><addressOffset>0x08</addressOffset></register>
+        <register><name>DR</name><description>Data register</description>
+          <addressOffset>0x0C</addressOffset><size>16</size>
+          <fields><field><name>DATA</name><bitOffset>0</bitOffset><bitWidth>16</bitWidth></field></fields>
+        </register>
+        <register><name>TEST%s</name><description>Array test</description>
+          <dim>2</dim><dimIncrement>4</dimIncrement><dimIndex>0,1</dimIndex>
+          <addressOffset>0x20</addressOffset>
+        </register>
+      </registers>
+    </peripheral>
+    <peripheral><name>I2C1</name><description>I2C bus</description>
+      <baseAddress>0x40005400</baseAddress>
+      <registers><register><name>DR</name><addressOffset>0x10</addressOffset></register></registers>
+    </peripheral>
+    <peripheral><name>USART2</name><description>Serial output</description>
+      <baseAddress>0x40004400</baseAddress><registers>
+        <register><name>SR</name><addressOffset>0x00</addressOffset></register>
+        <register><name>DR</name><addressOffset>0x04</addressOffset></register>
+        <register><name>BRR</name><addressOffset>0x08</addressOffset></register>
+        <register><name>CR1</name><addressOffset>0x0C</addressOffset></register>
+      </registers>
+    </peripheral>
+    <peripheral derivedFrom="USART2"><name>USART1</name>
+      <description>Derived serial output</description><baseAddress>0x40011000</baseAddress>
+    </peripheral>
+    <peripheral><name>GPIOA</name><description>GPIO port A</description>
+      <baseAddress>0x40020000</baseAddress><registers>
+        <register><name>MODER</name><addressOffset>0x00</addressOffset></register>
+        <register><name>ODR</name><addressOffset>0x14</addressOffset></register>
+        <register><name>BSRR</name><addressOffset>0x18</addressOffset></register>
+      </registers>
+    </peripheral>
+    <peripheral derivedFrom="GPIOA"><name>GPIOB</name>
+      <description>Derived GPIO port B</description><baseAddress>0x40020400</baseAddress>
+    </peripheral>
+    <peripheral><name>RCC</name><description>Reset and clock control</description>
+      <baseAddress>0x40023800</baseAddress><registers>
+        <register><name>AHB1ENR</name><addressOffset>0x30</addressOffset></register>
+        <register><name>APB1ENR</name><addressOffset>0x40</addressOffset></register>
+        <register><name>APB2ENR</name><addressOffset>0x44</addressOffset></register>
+      </registers>
+    </peripheral>
+  </peripherals>
+</device>

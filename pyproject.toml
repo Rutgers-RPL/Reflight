@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reflight"
+version = "0.1.0"
+description = "Qiling-based Cortex-M firmware proof of concept"
+requires-python = ">=3.12"
+dependencies = ["qiling==1.4.6", "cmsis-svd==0.6", "PyYAML==6.0.3"]
+
+[project.optional-dependencies]
+test = ["pytest==8.4.2"]
+
+[project.scripts]
+reflight = "reflight.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

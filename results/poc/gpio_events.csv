@@ -1,0 +1,3 @@
+instruction_count,pc,pin,level
+114,0x08000076,PA5,1
+116,0x0800007c,PA5,0

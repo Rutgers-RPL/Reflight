@@ -4,3 +4,5 @@
 .venv
 .ignore
 AGENTS.md
+tests/fixtures/firmware/build/
+__pycache__/

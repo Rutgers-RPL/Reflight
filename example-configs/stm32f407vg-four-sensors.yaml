@@ -1,0 +1,23 @@
+schema_version: 1
+mcu:
+  model: STM32F407VG
+  svd: ../tests/fixtures/svd/stm32f407-minimal.svd
+buses:
+  SPI1:
+    devices:
+      - {model: ICM45686, cs: PA4}
+      - {model: MS5611, cs: PA5}
+      - {model: BMI088Accel, cs: PA6}
+      - {model: BMI088Gyro, cs: PA7}
+      - {model: BMP581, cs: PB0}
+outputs:
+  telemetry:
+    peripheral: USART2
+    file: telemetry.bin
+    format: raw
+  capture:
+    file: hardware_events.csv
+    sources:
+      - type: gpio
+        pins: [PA4, PA5, PA6, PA7, PB0]
+        mode: transitions

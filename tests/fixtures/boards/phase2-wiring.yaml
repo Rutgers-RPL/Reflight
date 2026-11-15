@@ -1,0 +1,25 @@
+schema_version: 1
+mcu:
+  model: STM32F407VG
+  svd: ../../fixtures/svd/stm32f407-minimal.svd
+buses:
+  SPI1:
+    devices:
+      - model: ExampleSpiDevice
+        cs: PA4
+  I2C1:
+    devices:
+      - model: ExampleI2cDevice
+        address: 0x77
+outputs:
+  telemetry:
+    peripheral: USART2
+    handle: huart2
+    file: telemetry.bin
+    format: raw
+  capture:
+    file: hardware_events.csv
+    sources:
+      - type: gpio
+        pins: [PA5]
+        mode: transitions

@@ -1,0 +1,17 @@
+schema_version: 1
+mcu:
+  model: STM32F407VG
+  svd: ../tests/fixtures/svd/stm32f407-minimal.svd
+buses: {}
+outputs:
+  telemetry:
+    peripheral: USART2
+    handle: huart2
+    file: telemetry.bin
+    format: raw
+  capture:
+    file: hardware_events.csv
+    sources:
+      - type: gpio
+        pins: [PA5]
+        mode: transitions
