@@ -41,8 +41,9 @@ exercise repeated BSRR/ODR writes against Qiling's STM32F4 GPIO model.
 and MS5611 D1 (PA5) through SPI1. It emits `A5 5A`, then two signed 16-bit
 little-endian accel readings and one unsigned 32-bit little-endian ADC reading.
 PB1 goes high when the firmware's ICM reading reaches 50 raw counts. The
-matching board, CSV scenario, packet definition, Linux build/run commands,
-and timing limits are documented in the root README. This is a synthetic
+matching board, CSV scenario, packet definition, and Linux build/run commands
+are linked from the [root README](../../../README.md); timing limits are in the
+[reference](../../../docs/reference.md#virtual-time-and-termination). This is a synthetic
 acceptance fixture, not production flight firmware.
 
 `timer_progress.c` waits for three actual emulated SysTick interrupts before
