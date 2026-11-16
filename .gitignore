@@ -9,3 +9,4 @@ CLAUDE.md
 build
 tests/fixtures/firmware/build/
 __pycache__/
+.vscode
